@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tamagochi · audios</title>
+<title>tamagochi</title>
 <style>
   :root {
     --bg: #f6f4ef; --card: #fff; --ink: #1d1c1a; --muted: #77736b; --line: #e6e2d9;
@@ -16,19 +16,21 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 820px; margin: 0 auto; padding: 32px 20px 80px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  .pet { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 36px; }
+  .pet canvas { width: 240px; height: 240px; border-radius: 50%; image-rendering: pixelated;
+                box-shadow: 0 0 0 6px var(--card), 0 0 0 7px var(--line); }
+  .pet-life { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .pet-note { color: var(--muted); margin-top: -8px; text-align: center; }
+
+  .list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
   .count { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .api { margin: 20px 0 28px; padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
-  .api-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .api small { color: var(--muted); }
-  code, pre { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  pre { margin: 10px 0 0; padding: 10px 12px; background: var(--bg); border-radius: 6px; overflow-x: auto; }
-  button, .btn { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--ink);
-                 padding: 6px 12px; border-radius: 7px; }
-  button:hover, .btn:hover { border-color: var(--accent); }
-  button:focus-visible, .btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+           padding: 6px 12px; border-radius: 7px; margin-left: 8px; }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button:disabled { opacity: .5; cursor: default; }
   #list { display: grid; gap: 12px; }
   .item { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -38,40 +40,177 @@
   .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .pending { color: var(--warn); }
   .error { color: var(--bad); }
-  .error button { margin-left: 8px; }
-  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+  .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <h1>Audios recibidos</h1>
-    <span class="count" id="count"></span>
-  </header>
-
-  <section class="api">
-    <div class="api-row">
-      <div><strong>API abierta</strong> · <code>POST /api/audios</code><br>
-        <small>Campo <code>audio</code> en multipart/form-data, máximo 25 MB.</small></div>
-      <label class="btn">Subir audio de prueba
-        <input id="file" type="file" accept="audio/*,video/webm,video/mp4" hidden>
-      </label>
-    </div>
-    <pre id="curl"></pre>
+  <section class="pet" aria-live="polite">
+    <canvas id="pet" width="240" height="240" role="img" aria-label="Tamagochi"></canvas>
+    <div class="pet-life" id="pet-life"></div>
+    <div class="pet-note" id="pet-note"></div>
   </section>
 
+  <div class="list-head">
+    <h1>Audios</h1>
+    <span class="count" id="count"></span>
+  </div>
   <div id="list"></div>
   <p class="empty" id="empty" hidden>Todavía no llegó ningún audio.</p>
 </main>
 
 <script>
+// ---------- Tamagochi: mismo dibujo y mismas reglas que el dispositivo ----------
+
+const LIFE_MS = 60 * 60 * 1000;   // el aro se vacía en una hora
+const GAIN_PER_WORD = 100;        // milésimas de vida por palabra entendida
+const GAIN_PER_SECOND = 30;       // si no se pudo transcribir, por segundo de audio
+
+const BODY = [
+  '................', '...KK......KK...', '..KBBK....KBBK..', '..KBBBKKKKBBBK..',
+  '.KBBBBBBBBBBBBK.', '.KBLBBBBBBBBBBK.', 'KBBLBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK',
+  'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK',
+  '.KBBBBBBBBBBBBK.', '.KBBBBBBBBBBBBK.', '..KKBBKKKKBBKK..', '...KKK....KKK...',
+];
+// Caras: filas 5 a 12 de la cuadrícula.
+const FACES = {
+  idle:   ['', '', '....WE....WE....', '....EE....EE....', '', '.......KK.......', '', ''],
+  blink:  ['', '', '', '....KK....KK....', '', '.......KK.......', '', ''],
+  sad:    ['', '', '', '....WE....WE....', '....EE....EE....', '.....T..........', '.......KK.......', '......K..K......'],
+  chewA:  ['', '', '....K......K....', '...K.K....K.K...', '', '.......MM.......', '.......MM.......', ''],
+  chewB:  ['', '', '....K......K....', '...K.K....K.K...', '', '......KKKK......', '', ''],
+  happy:  ['', '', '....K......K....', '...K.K....K.K...', '.PP..........PP.', '......K..K......', '.......KK.......', ''],
+  dead:   ['', '', '...K.K....K.K...', '....K......K....', '...K.K....K.K...', '', '......KKKK......', ''],
+};
+const BODY_COLORS = {
+  ok:     { K: '#134e4a', B: '#5eead4', L: '#ccfbf1' },
+  hungry: { K: '#1e3a5f', B: '#93b4d8', L: '#dbe7f5' },
+  dead:   { K: '#374151', B: '#8b929e', L: '#b6bcc6' },
+};
+const FACE_COLORS = { W: '#fff', E: '#111827', K: '#111827', M: '#9f1239', P: '#fb7185', T: '#60a5fa' };
+const HEART = ['.XX.XX.', 'XXXXXXX', 'XXXXXXX', '.XXXXX.', '..XXX..', '...X...'];
+
+const canvas = document.getElementById('pet');
+const ctx = canvas.getContext('2d');
+const CX = 120, CY = 120, SCALE = 7, SPR_X = CX - 56, SPR_Y = CY + 2 - 56;
+
+function drawPet({ life, face, body, bounce = 0, heart = false, halo = false, dots = -1, ringDim = false }) {
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(0, 0, 240, 240);
+
+  // Aro de vida: lleno desde arriba, en sentido horario.
+  const ring = (from, to, color) => {
+    ctx.beginPath();
+    ctx.arc(CX, CY, 110, from, to);
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  };
+  const top = -Math.PI / 2;
+  ring(0, Math.PI * 2, '#1f2937');
+  if (life > 0) {
+    const color = ringDim ? '#7f1d1d' : life > 500 ? '#4ade80' : life > 200 ? '#facc15' : '#ef4444';
+    ring(top, top + (Math.min(life, 1000) / 1000) * Math.PI * 2, color);
+  }
+
+  if (heart) {
+    ctx.fillStyle = '#fb7185';
+    HEART.forEach((row, y) => [...row].forEach((c, x) => c === 'X' && ctx.fillRect(CX - 14 + x * 4, 28 + y * 4, 4, 4)));
+  }
+  if (halo) {
+    ctx.beginPath();
+    ctx.ellipse(CX, 46, 26, 7, 0, 0, Math.PI * 2);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = '#fde047';
+    ctx.stroke();
+  }
+  if (dots >= 0) {
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(CX - 20 + i * 20, 200, 5, 0, Math.PI * 2);
+      ctx.fillStyle = i === dots ? '#f9fafb' : '#374151';
+      ctx.fill();
+    }
+  }
+
+  const pal = BODY_COLORS[body];
+  const rows = FACES[face];
+  for (let gy = 0; gy < 16; gy++) {
+    for (let gx = 0; gx < 16; gx++) {
+      const f = gy >= 5 && gy < 13 ? rows[gy - 5][gx] : undefined;
+      const color = FACE_COLORS[f] || pal[BODY[gy][gx]];
+      if (color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(SPR_X + gx * SCALE, SPR_Y + bounce + gy * SCALE, SCALE, SCALE);
+      }
+    }
+  }
+}
+
+// Cuánta vida dio un audio (milésimas), con la misma regla del dispositivo.
+function gainOf(a) {
+  if (a.status === 'done') return Math.min(1000, (a.words || 0) * GAIN_PER_WORD);
+  if (a.status === 'error' && a.mime === 'audio/wav') {
+    return Math.min(1000, Math.floor((a.size - 44) / 32000) * GAIN_PER_SECOND);
+  }
+  return 0;
+}
+
+// Reconstruye la vida actual repasando los audios en orden: cada uno suma, y
+// entre uno y otro la vida baja con el tiempo.
+function simulateLife(audios, now) {
+  let life = 0, last = null, fedOnce = false;
+  for (const a of [...audios].sort((x, y) => x.created_at.localeCompare(y.created_at))) {
+    const t = Date.parse(a.created_at);
+    if (last !== null) life = Math.max(0, life - ((t - last) / LIFE_MS) * 1000);
+    const gain = gainOf(a);
+    if (gain > 0) { life = Math.min(1000, life + gain); fedOnce = true; }
+    last = t;
+  }
+  if (last !== null) life = Math.max(0, life - ((now - last) / LIFE_MS) * 1000);
+  return { life, fedOnce };
+}
+
+let audios = [];
+let happyUntil = 0;
+
+function tickPet() {
+  const now = Date.now();
+  const { life, fedOnce } = simulateLife(audios, now);
+  const digesting = audios.some((a) => a.status === 'transcribing');
+  const dead = fedOnce && life <= 0;
+  const hungry = life < 300;
+  const scene = { life, body: dead ? 'dead' : hungry ? 'hungry' : 'ok', ringDim: !dead && fedOnce && life < 100 && Math.floor(now / 400) % 2 };
+
+  if (digesting) {
+    scene.face = Math.floor(now / 250) % 2 ? 'chewA' : 'chewB';
+    scene.dots = Math.floor(now / 250) % 3;
+  } else if (now < happyUntil) {
+    scene.face = 'happy'; scene.heart = true; scene.bounce = Math.floor(now / 200) % 2 ? -4 : 0;
+  } else if (dead) {
+    scene.face = 'dead'; scene.halo = true;
+  } else if (hungry) {
+    scene.face = 'sad'; scene.bounce = Math.floor(now / 900) % 2 ? 2 : 0;
+  } else {
+    scene.face = now % 4000 < 160 ? 'blink' : 'idle'; scene.bounce = Math.floor(now / 500) % 2 ? 3 : 0;
+  }
+  drawPet(scene);
+
+  const pct = Math.ceil(life / 10);
+  const mins = Math.ceil((life / 1000) * 60);
+  document.getElementById('pet-life').textContent = dead ? 'Murió de hambre' : `${pct}% de vida`;
+  document.getElementById('pet-note').textContent =
+    dead ? 'Envíale un audio para revivirlo.'
+    : !fedOnce ? 'Todavía no ha comido. Se alimenta con audios.'
+    : `Le ${mins === 1 ? 'queda 1 minuto' : `quedan ${mins} minutos`} sin comer.`;
+}
+
+// ---------- Listado de audios ----------
+
 const list = document.getElementById('list');
 const empty = document.getElementById('empty');
 const count = document.getElementById('count');
-const items = new Map(); // id -> { el, sig }
-
-document.getElementById('curl').textContent =
-  `curl -X POST ${location.origin}/api/audios -F "audio=@nota.m4a"`;
+const items = new Map(); // id -> { el, body, sig }
 
 const fmtDate = new Intl.DateTimeFormat('es', { dateStyle: 'medium', timeStyle: 'medium' });
 const fmtSize = (b) => b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`;
@@ -90,7 +229,7 @@ function renderBody(a) {
     return el('p', { className: 'text pending' }, 'Transcribiendo…');
   }
   const retry = el('button', { textContent: 'Reintentar' });
-  retry.onclick = async () => {
+  retry.onclick = () => {
     retry.disabled = true;
     fetch(`/api/audios/${a.id}/transcribe`, { method: 'POST' }).finally(refresh);
     setTimeout(refresh, 300);
@@ -99,21 +238,36 @@ function renderBody(a) {
 }
 
 function createItem(a) {
-  const audio = el('audio', { controls: true, preload: 'none', src: a.audio_url });
   const body = el('div');
   const node = el('article', { className: 'item' },
     el('div', { className: 'meta' },
       el('time', { dateTime: a.created_at }, fmtDate.format(new Date(a.created_at))),
-      el('span', {}, `#${a.id} · ${a.original_name || a.mime} · ${fmtSize(a.size)}`)),
-    audio, body);
+      el('span', {}, `#${a.id} · ${fmtSize(a.size)}`)),
+    el('audio', { controls: true, preload: 'none', src: a.audio_url }),
+    body);
   return { el: node, body, sig: '' };
 }
 
+let firstLoad = true;
 async function refresh() {
   let data;
-  try { data = await (await fetch('/api/audios')).json(); } catch { return; }
-  count.textContent = data.length === 1 ? '1 audio' : `${data.length} audios`;
+  try {
+    const res = await fetch('/api/audios');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Error ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    if (firstLoad) { empty.hidden = false; empty.textContent = err.message; }
+    return;
+  }
+  empty.textContent = 'Todavía no llegó ningún audio.';
   empty.hidden = data.length > 0;
+  count.textContent = data.length === 1 ? '1 audio' : `${data.length} audios`;
+
+  // Si acaba de llegar comida nueva, se pone contento un momento.
+  const known = new Set(audios.filter((a) => gainOf(a) > 0).map((a) => a.id));
+  if (!firstLoad && data.some((a) => gainOf(a) > 0 && !known.has(a.id))) happyUntil = Date.now() + 4000;
+  audios = data;
+  firstLoad = false;
 
   const seen = new Set();
   let prev = null;
@@ -131,19 +285,8 @@ async function refresh() {
   for (const [id, it] of items) if (!seen.has(id)) { it.el.remove(); items.delete(id); }
 }
 
-document.getElementById('file').onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append('audio', file);
-  e.target.value = '';
-  const req = fetch('/api/audios', { method: 'POST', body: form });
-  setTimeout(refresh, 300);
-  const res = await req;
-  if (!res.ok) alert((await res.json().catch(() => ({}))).error || 'No se pudo subir');
-  refresh();
-};
-
+tickPet();
+setInterval(tickPet, 100);
 refresh();
 setInterval(refresh, 3000);
 </script>
