@@ -71,7 +71,17 @@ Formatos: mp3, m4a, mp4, wav, webm, ogg, flac, aac. Máximo 25 MB en local y 4 M
 
   Después vuelve a desplegar. Mientras falte alguno, la API responde 503 indicando cuál.
 
-La API no tiene autenticación: cualquiera que alcance el servidor puede enviar audios y leerlos.
+## Clave para subir audios
+
+Si defines la variable `API_KEY` (en `.env` o en Vercel), `POST /api/audios` solo acepta peticiones con esa clave:
+
+```bash
+curl -X POST http://localhost:3000/api/audios -H "Authorization: Bearer TU_CLAVE" -F "audio=@nota.m4a"
+```
+
+El tamagochi la envía si está definida como `API_KEY` en `firmware/main/secrets.h`. Sin la variable, cualquiera puede subir audios.
+
+Leer el listado y escuchar los audios es público siempre, porque lo usa el home.
 
 # Firmware (tamagochi)
 

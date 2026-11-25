@@ -26,6 +26,11 @@ static SemaphoreHandle_t s_stopped;
 static volatile bool s_recording;
 static volatile size_t s_bytes;
 static volatile int s_level;
+static volatile int s_voiced_ms;
+
+// Volumen promedio de cada bloque de la grabación en curso.
+#define MAX_BLOCKS (REC_MAX_BYTES / (FRAMES * 2))
+static uint16_t s_block_level[MAX_BLOCKS];
 
 static esp_err_t codec_init(void)
 {
@@ -103,18 +108,23 @@ static void audio_task(void *arg)
 
         size_t written = 0;
         int max_peak = 0;
+        int blocks = 0;
         while (s_recording && written + sizeof(mono) <= REC_MAX_BYTES) {
             if (esp_codec_dev_read(s_dev, stereo, sizeof(stereo)) != ESP_CODEC_DEV_OK) {
                 ESP_LOGE(TAG, "falló la lectura del micrófono");
                 break;
             }
-            int peak = 0;
+            int peak = 0, sum = 0;
             for (int i = 0; i < FRAMES; i++) {
                 mono[i] = stereo[i * 2];
                 int a = abs(mono[i]);
+                sum += a;
                 if (a > peak) {
                     peak = a;
                 }
+            }
+            if (blocks < MAX_BLOCKS) {
+                s_block_level[blocks++] = (uint16_t)(sum / FRAMES);
             }
             s_level = peak;
             if (peak > max_peak) {
@@ -127,7 +137,24 @@ static void audio_task(void *arg)
             written += sizeof(mono);
             s_bytes = written;
         }
-        ESP_LOGI(TAG, "grabación terminada, pico máximo %d de 32767", max_peak);
+        // ¿Hubo voz? Se compara cada bloque con el más callado de la grabación.
+        int quietest = 32767, loudest = 0, voiced = 0;
+        for (int i = 0; i < blocks; i++) {
+            if (s_block_level[i] < quietest) {
+                quietest = s_block_level[i];
+            }
+            if (s_block_level[i] > loudest) {
+                loudest = s_block_level[i];
+            }
+        }
+        for (int i = 0; i < blocks; i++) {
+            if (s_block_level[i] * 10 > quietest * VOICE_RATIO_X10) {
+                voiced++;
+            }
+        }
+        s_voiced_ms = voiced * FRAMES * 1000 / SAMPLE_RATE;
+        ESP_LOGI(TAG, "grabación terminada: pico %d, volumen %d a %d, voz %d ms", max_peak, quietest, loudest,
+                 s_voiced_ms);
         s_recording = false;
         s_level = 0;
         xSemaphoreGive(s_stopped);
@@ -174,6 +201,7 @@ size_t audio_stop(void)
 
 bool audio_is_recording(void) { return s_recording; }
 int audio_level(void) { return s_level; }
+int audio_voiced_ms(void) { return s_voiced_ms; }
 const esp_partition_t *audio_partition(void) { return s_part; }
 
 void audio_erase(size_t used_bytes)

@@ -27,6 +27,12 @@
 #define REC_MAX_BYTES  (SAMPLE_RATE * 2 * 30)   // 30 segundos
 #define REC_MIN_BYTES  (SAMPLE_RATE * 2 * 6 / 10) // menos de 0.6 s se descarta
 
+// Para que el silencio no cuente como comida: una grabación solo se envía si
+// tiene voz. Un bloque (32 ms) cuenta como voz si su volumen supera estas
+// veces el del momento más callado de la misma grabación.
+#define VOICE_RATIO_X10  25    // 2.5 veces
+#define VOICE_MIN_MS     300   // voz mínima para enviar el audio
+
 // Vida: se vacía en una hora sin comer.
 #define LIFE_MAX_MS        (60LL * 60 * 1000)
 // Cada palabra que se entiende en el audio devuelve 10% de vida (10 palabras = lleno).

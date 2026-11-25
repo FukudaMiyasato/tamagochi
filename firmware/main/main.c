@@ -175,6 +175,10 @@ void app_main(void)
                 if (s_rec_bytes < REC_MIN_BYTES) {
                     audio_erase(s_rec_bytes);  // toque accidental
                     set_state(ST_IDLE);
+                } else if (audio_voiced_ms() < VOICE_MIN_MS) {
+                    ESP_LOGI(TAG, "no se oyó voz: no se envía");
+                    audio_erase(s_rec_bytes);
+                    set_state(ST_FAIL);
                 } else {
                     s_send_done = false;
                     xTaskCreate(send_task, "send", 8192, NULL, 5, NULL);

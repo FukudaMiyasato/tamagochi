@@ -13,8 +13,9 @@
 #include "esp_wifi.h"
 #include "nvs.h"
 
-// Opcional: main/secrets.h con WIFI_SSID y WIFI_PASSWORD. Si existe, manda
-// sobre el Wi-Fi que la placa tenga guardado.
+// Opcional: main/secrets.h con WIFI_SSID y WIFI_PASSWORD (si existen, mandan
+// sobre el Wi-Fi que la placa tenga guardado) y API_KEY (la clave que la web
+// exige para aceptar audios).
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
@@ -146,6 +147,9 @@ feed_result_t net_send_audio(const esp_partition_t *part, size_t pcm_bytes)
     }
 
     esp_http_client_set_header(http, "Content-Type", "audio/wav");
+#ifdef API_KEY
+    esp_http_client_set_header(http, "Authorization", "Bearer " API_KEY);
+#endif
     if (esp_http_client_open(http, 44 + pcm_bytes) != ESP_OK) {
         ESP_LOGE(TAG, "no se pudo conectar con la API");
         goto done;

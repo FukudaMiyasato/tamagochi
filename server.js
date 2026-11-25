@@ -111,17 +111,33 @@ const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 // API abierta: sin autenticación y con CORS para cualquier origen.
 app.use('/api', (req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+
+// Si existe API_KEY, solo quien la envíe puede subir audios:
+//   Authorization: Bearer <clave>
+// Leer el listado y escuchar los audios sigue siendo público (lo usa el home).
+function requireKey(req, res, next) {
+  const expected = process.env.API_KEY;
+  if (!expected) return next();
+  const given = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  if (!crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'Clave incorrecta o ausente' });
+  }
+  next();
+}
 
 // POST /api/audios
 //   a) multipart/form-data con el archivo en el campo "audio" (o "file")
 //   b) el audio crudo en el body con Content-Type: audio/*
 app.post(
   '/api/audios',
+  requireKey,
   upload.any(),
   express.raw({ type: ['audio/*', 'video/webm', 'video/mp4', 'application/octet-stream'], limit: MAX_BYTES }),
   wrap(async (req, res) => {
