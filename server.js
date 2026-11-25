@@ -32,12 +32,31 @@ function detectAudio(mime, name) {
   return null;
 }
 
+// Con silencio o ruido, Whisper suele inventar frases de cierre de video.
+// Se descartan los tramos que él mismo marca como "sin voz" y esas frases típicas.
+const NO_SPEECH_MAX = 0.5;
+const HALLUCINATIONS = [
+  /^(muchas )?gracias( por (ver|mirar|su atención|vernos))?( el video)?$/,
+  /^thank(s| you)( for watching)?$/,
+  /^subt[ií]tulos? (realizados?|creados?|hechos?) por/,
+  /amara\.org/,
+  /^(suscr[ií]bete|suscr[ií]banse)( al canal)?$/,
+  /^(hasta la pr[oó]xima|nos vemos en el pr[oó]ximo video)$/,
+];
+const isHallucination = (text) => {
+  const t = text.toLowerCase().replace(/[.,!¡¿?…"]/g, '').replace(/\s+/g, ' ').trim();
+  return HALLUCINATIONS.some((re) => re.test(t));
+};
+
 async function transcribe(buffer, mime, filename) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('Falta OPENAI_API_KEY');
 
   const form = new FormData();
   form.append('model', 'whisper-1');
+  form.append('language', process.env.WHISPER_LANGUAGE || 'es');
+  form.append('temperature', '0');
+  form.append('response_format', 'verbose_json');
   form.append('file', new Blob([buffer], { type: mime }), filename);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -47,7 +66,13 @@ async function transcribe(buffer, mime, filename) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error?.message || `OpenAI respondió ${res.status}`);
-  return body.text ?? '';
+
+  const segments = Array.isArray(body.segments) ? body.segments : [{ text: body.text ?? '' }];
+  return segments
+    .filter((seg) => !(seg.no_speech_prob > NO_SPEECH_MAX))
+    .map((seg) => String(seg.text || '').trim())
+    .filter((text) => text && !isHallucination(text))
+    .join(' ');
 }
 
 async function runTranscription(id, buffer) {
