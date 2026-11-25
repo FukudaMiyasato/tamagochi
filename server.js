@@ -1,35 +1,12 @@
 const express = require('express');
 const multer = require('multer');
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { DatabaseSync } = require('node:sqlite');
+const { getStore } = require('./store');
 
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const AUDIO_DIR = path.join(DATA_DIR, 'audios');
-const MAX_BYTES = 25 * 1024 * 1024; // límite de la API de Whisper
-
-fs.mkdirSync(AUDIO_DIR, { recursive: true });
-
-const db = new DatabaseSync(path.join(DATA_DIR, 'tamagochi.db'));
-db.exec(`
-  CREATE TABLE IF NOT EXISTS audios (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename      TEXT NOT NULL,
-    original_name TEXT,
-    mime          TEXT NOT NULL,
-    size          INTEGER NOT NULL,
-    status        TEXT NOT NULL,          -- transcribing | done | error
-    text          TEXT,
-    error         TEXT,
-    created_at    TEXT NOT NULL
-  )
-`);
-// Lo que quedó a medias si el servidor se reinició mientras transcribía.
-db.prepare(
-  "UPDATE audios SET status = 'error', error = 'El servidor se reinició durante la transcripción' WHERE status = 'transcribing'"
-).run();
+// Whisper acepta 25 MB, pero Vercel corta las peticiones en 4.5 MB.
+const MAX_BYTES = process.env.VERCEL ? 4 * 1024 * 1024 : 25 * 1024 * 1024;
 
 const MIME_BY_EXT = {
   mp3: 'audio/mpeg', mpga: 'audio/mpeg', mpeg: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4',
@@ -55,13 +32,13 @@ function detectAudio(mime, name) {
   return null;
 }
 
-async function transcribe(filePath, mime) {
+async function transcribe(buffer, mime, filename) {
   const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('Falta OPENAI_API_KEY en el archivo .env');
+  if (!key) throw new Error('Falta OPENAI_API_KEY');
 
   const form = new FormData();
   form.append('model', 'whisper-1');
-  form.append('file', new Blob([fs.readFileSync(filePath)], { type: mime }), path.basename(filePath));
+  form.append('file', new Blob([buffer], { type: mime }), filename);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -73,16 +50,19 @@ async function transcribe(filePath, mime) {
   return body.text ?? '';
 }
 
-async function runTranscription(id) {
-  const row = db.prepare('SELECT * FROM audios WHERE id = ?').get(id);
+async function runTranscription(id, buffer) {
+  const store = getStore();
+  const row = await store.get(id);
   try {
-    const text = await transcribe(path.join(AUDIO_DIR, row.filename), row.mime);
-    db.prepare("UPDATE audios SET status = 'done', text = ?, error = NULL WHERE id = ?").run(text, id);
+    const text = await transcribe(buffer ?? (await store.readAudio(row)), row.mime, row.filename);
+    await store.update(id, { status: 'done', text });
   } catch (err) {
-    db.prepare("UPDATE audios SET status = 'error', error = ? WHERE id = ?").run(String(err.message || err), id);
+    await store.update(id, { status: 'error', error: String(err.message || err) });
   }
-  return publicRow(db.prepare('SELECT * FROM audios WHERE id = ?').get(id));
+  return publicRow(await store.get(id));
 }
+
+const countWords = (text) => (String(text || '').match(/[\p{L}\p{N}]+/gu) || []).length;
 
 function publicRow(r) {
   return {
@@ -93,26 +73,15 @@ function publicRow(r) {
     size: r.size,
     status: r.status,
     text: r.text,
+    words: countWords(r.text), // el tamagochi se alimenta según esto
     error: r.error,
     created_at: r.created_at,
   };
 }
 
-function saveAudio(buffer, mime, originalName) {
-  const kind = detectAudio(mime, originalName);
-  if (!kind) return null;
-  const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${kind.ext}`;
-  fs.writeFileSync(path.join(AUDIO_DIR, filename), buffer);
-  const info = db
-    .prepare(
-      "INSERT INTO audios (filename, original_name, mime, size, status, created_at) VALUES (?, ?, ?, ?, 'transcribing', ?)"
-    )
-    .run(filename, originalName || null, kind.mime, buffer.length, new Date().toISOString());
-  return Number(info.lastInsertRowid);
-}
-
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES, files: 1 } });
+const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // API abierta: sin autenticación y con CORS para cualquier origen.
 app.use('/api', (req, res, next) => {
@@ -130,7 +99,7 @@ app.post(
   '/api/audios',
   upload.any(),
   express.raw({ type: ['audio/*', 'video/webm', 'video/mp4', 'application/octet-stream'], limit: MAX_BYTES }),
-  async (req, res) => {
+  wrap(async (req, res) => {
     let buffer, mime, name;
     const file = (req.files || []).find((f) => f.fieldname === 'audio' || f.fieldname === 'file') || req.files?.[0];
     if (file) {
@@ -143,52 +112,61 @@ app.post(
     if (!buffer?.length) {
       return res.status(400).json({ error: 'Envía un audio en el campo "audio" (multipart/form-data) o como body con Content-Type audio/*' });
     }
-    const id = saveAudio(buffer, mime, name);
-    if (!id) {
+    const kind = detectAudio(mime, name);
+    if (!kind) {
       return res.status(415).json({ error: 'Formato no soportado. Usa mp3, m4a, mp4, wav, webm, ogg, flac o aac.' });
     }
-    res.status(201).json(await runTranscription(id));
-  }
+    const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${kind.ext}`;
+    const id = await getStore().create({ buffer, filename, mime: kind.mime, originalName: name });
+    res.status(201).json(await runTranscription(id, buffer));
+  })
 );
 
-app.get('/api/audios', (req, res) => {
-  res.json(db.prepare('SELECT * FROM audios ORDER BY id DESC').all().map(publicRow));
-});
+app.get('/api/audios', wrap(async (req, res) => {
+  res.json((await getStore().list()).map(publicRow));
+}));
 
-app.get('/api/audios/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM audios WHERE id = ?').get(Number(req.params.id));
+app.get('/api/audios/:id', wrap(async (req, res) => {
+  const row = await getStore().get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'No existe' });
   res.json(publicRow(row));
-});
+}));
 
-app.get('/api/audios/:id/file', (req, res) => {
-  const row = db.prepare('SELECT * FROM audios WHERE id = ?').get(Number(req.params.id));
+app.get('/api/audios/:id/file', wrap(async (req, res) => {
+  const store = getStore();
+  const row = await store.get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'No existe' });
-  res.set('X-Content-Type-Options', 'nosniff');
-  res.type(row.mime).sendFile(path.join(AUDIO_DIR, row.filename));
-});
+  store.sendAudio(row, res);
+}));
 
 // Reintenta la transcripción de un audio que falló.
-app.post('/api/audios/:id/transcribe', async (req, res) => {
+app.post('/api/audios/:id/transcribe', wrap(async (req, res) => {
+  const store = getStore();
   const id = Number(req.params.id);
-  const row = db.prepare('SELECT * FROM audios WHERE id = ?').get(id);
+  const row = await store.get(id);
   if (!row) return res.status(404).json({ error: 'No existe' });
   if (row.status === 'transcribing') return res.status(409).json({ error: 'Ya se está transcribiendo' });
-  db.prepare("UPDATE audios SET status = 'transcribing', error = NULL WHERE id = ?").run(id);
+  await store.update(id, { status: 'transcribing' });
   res.json(await runTranscription(id));
-});
+}));
 
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use((err, req, res, next) => {
   if (err?.code === 'LIMIT_FILE_SIZE' || err?.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'El audio supera los 25 MB' });
+    return res.status(413).json({ error: `El audio supera los ${Math.round(MAX_BYTES / 1048576)} MB` });
   }
+  if (err?.status === 503) return res.status(503).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Error interno' });
 });
 
-app.listen(PORT, () => {
-  console.log(`tamagochi escuchando en http://localhost:${PORT}`);
-  if (!process.env.OPENAI_API_KEY) console.warn('Aviso: falta OPENAI_API_KEY; los audios se guardarán sin transcribir.');
-});
+// En Vercel la app se exporta y la plataforma la sirve; en local escucha en un puerto.
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`tamagochi escuchando en http://localhost:${PORT}`);
+    if (!process.env.OPENAI_API_KEY) console.warn('Aviso: falta OPENAI_API_KEY; los audios se guardarán sin transcribir.');
+  });
+}
+
+module.exports = app;
