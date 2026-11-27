@@ -2,7 +2,7 @@
 
 Dos partes:
 
-- **Web** (esta carpeta): dashboard que recibe audios por una API abierta, los transcribe con Whisper (OpenAI) y los lista en el home con audio, texto y fecha.
+- **Web** (esta carpeta): dashboard que recibe audios por una API, los transcribe con Whisper (OpenAI), les asigna un sentimiento y una categoría, y muestra en el home los gráficos y los textos. El audio no se guarda.
 - **Firmware** ([firmware/](firmware/)): un tamagochi para ESP32-C3 con pantalla redonda que se alimenta enviando audios a esa API.
 
 # Web
@@ -23,11 +23,12 @@ Home: http://localhost:3000
 
 | Método | Ruta | Descripción |
 | --- | --- | --- |
-| `POST` | `/api/audios` | Recibe un audio, lo guarda y lo transcribe. Responde con el registro. |
+| `POST` | `/api/audios` | Recibe un audio, lo transcribe y lo clasifica. Responde con el registro. |
 | `GET` | `/api/audios` | Lista todos los audios, del más nuevo al más viejo. |
 | `GET` | `/api/audios/:id` | Un registro. |
-| `GET` | `/api/audios/:id/file` | El archivo de audio. |
-| `POST` | `/api/audios/:id/transcribe` | Reintenta una transcripción que falló. |
+| `POST` | `/api/audios/:id/analyze` | Clasifica un texto que quedó sin sentimiento. |
+| `GET` | `/api/audios/:id/file` | El audio, solo en registros antiguos que lo conservan. |
+| `POST` | `/api/audios/:id/transcribe` | Reintenta una transcripción (solo registros antiguos con audio). |
 
 Enviar un audio (multipart, campo `audio`):
 
@@ -46,16 +47,21 @@ Respuesta:
 ```json
 {
   "id": 1,
-  "audio_url": "/api/audios/1/file",
+  "audio_url": null,
   "original_name": "nota.m4a",
   "mime": "audio/mp4",
   "size": 48213,
   "status": "done",
   "text": "Hola, esto es una prueba.",
+  "sentiment": "neutro",
+  "category": "saludo",
+  "words": 5,
   "error": null,
   "created_at": "2026-11-24T20:51:00.000Z"
 }
 ```
+
+`sentiment` es `positivo`, `negativo` o `neutro`. `category` es una de: `queja`, `pedido`, `pregunta`, `agradecimiento`, `saludo`, `idea`, `comentario`, `otro`. Las asigna un modelo de OpenAI (`gpt-4o-mini`; se cambia con `OPENAI_CHAT_MODEL`).
 
 `words` es la cantidad de palabras de la transcripción; el tamagochi la usa para saber cuánto comió.
 
@@ -63,13 +69,10 @@ Formatos: mp3, m4a, mp4, wav, webm, ogg, flac, aac. Máximo 25 MB en local y 4 M
 
 ## Almacenamiento
 
-- **En local**: los audios y la base SQLite se guardan en `data/` (fuera de git).
-- **En Vercel** (no tiene disco persistente): los audios van a Vercel Blob y los registros a Postgres. En el proyecto de Vercel, pestaña Storage, conecta:
-  1. Un store **Blob** con acceso público (crea `BLOB_READ_WRITE_TOKEN`).
-  2. Una base **Postgres**, por ejemplo Neon (crea `DATABASE_URL`).
-  3. En Settings → Environment Variables, agrega `OPENAI_API_KEY`.
+Solo se guardan los registros (texto, sentimiento, categoría y fecha); el audio se descarta después de transcribirlo.
 
-  Después vuelve a desplegar. Mientras falte alguno, la API responde 503 indicando cuál.
+- **En local**: base SQLite en `data/` (fuera de git).
+- **En Vercel**: Postgres. En el proyecto, pestaña Storage, conecta una base **Postgres**, por ejemplo Neon (crea `DATABASE_URL`), y en Settings → Environment Variables agrega `OPENAI_API_KEY`. Después vuelve a desplegar.
 
 ## Clave para subir audios
 
@@ -81,7 +84,7 @@ curl -X POST http://localhost:3000/api/audios -H "Authorization: Bearer TU_CLAVE
 
 El tamagochi la envía si está definida como `API_KEY` en `firmware/main/secrets.h`. Sin la variable, cualquiera puede subir audios.
 
-Leer el listado y escuchar los audios es público siempre, porque lo usa el home.
+Leer el listado es público siempre, porque lo usa el home.
 
 # Firmware (tamagochi)
 
@@ -94,7 +97,11 @@ Placa: Spotpear Toy AI Core C3 1.28 (ESP32-C3, pantalla GC9A01 de 240x240, códe
 - La vida se guarda en la placa: si la apagas, al volver descuenta el tiempo que estuvo apagada.
 - El Wi-Fi se toma del que ya tenía guardado el firmware original. Si no hay, crea `firmware/main/secrets.h` con `#define WIFI_SSID "..."` y `#define WIFI_PASSWORD "..."`.
 
-Pines, URL de la API y reglas de vida están en [firmware/main/config.h](firmware/main/config.h).
+- **Mascota:** las 15 expresiones salen de `assets/mascota.webp`. Para cambiarla, reemplaza esa imagen (misma disposición de 5x3) y ejecuta `python tools/make_sprites.py`, que regenera los sprites de la placa y de la web.
+- **Sonidos:** melodías cortas por el parlante al encender, comer, fallar, tener hambre, morir y revivir. Volumen en `SOUND_VOLUME` (0 lo silencia).
+- **Luz:** el LED de la placa respira en verde, amarillo o rojo según la vida; rojo fijo al grabar, azul al enviar, rosa al comer y naranja si falla. Brillo en `LED_BRIGHTNESS`.
+
+Pines, URL de la API, volumen, brillo y reglas de vida están en [firmware/main/config.h](firmware/main/config.h).
 
 Compilar y cargar (ESP-IDF 5.4):
 

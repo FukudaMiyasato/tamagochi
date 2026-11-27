@@ -8,10 +8,12 @@
   :root {
     --bg: #f6f4ef; --card: #fff; --ink: #1d1c1a; --muted: #77736b; --line: #e6e2d9;
     --accent: #2f6f5e; --warn: #a15c00; --bad: #a3302a;
+    --pos: #2a78d6; --neg: #d03b3b; --neu: #8f8b82;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #161614; --card: #1f1f1c; --ink: #ecebe6; --muted: #98948a; --line: #2e2d29;
-            --accent: #7fc4ae; --warn: #e0a34d; --bad: #ee8279; }
+            --accent: #7fc4ae; --warn: #e0a34d; --bad: #ee8279;
+            --pos: #4a90e2; --neg: #e5645f; --neu: #b5b1a8; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
@@ -19,10 +21,36 @@
   main { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
 
   .pet { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 36px; }
-  .pet canvas { width: 240px; height: 240px; border-radius: 50%; image-rendering: pixelated;
+  .pet canvas { width: 240px; height: 240px; border-radius: 50%; 
                 box-shadow: 0 0 0 6px var(--card), 0 0 0 7px var(--line); }
   .pet-life { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
   .pet-note { color: var(--muted); margin-top: -8px; text-align: center; }
+
+  .stats { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px;
+           margin-bottom: 32px; display: grid; gap: 22px; }
+  .stats h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--muted); }
+  .stats button { margin: 0; }
+  .stack { display: flex; gap: 2px; height: 18px; margin-bottom: 10px; }
+  .stack span { min-width: 4px; }
+  .stack span:first-child { border-radius: 4px 0 0 4px; }
+  .stack span:last-child { border-radius: 0 4px 4px 0; }
+  .stack span:only-child { border-radius: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; }
+  .legend button { display: inline-flex; align-items: center; gap: 8px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .num { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .cats { display: grid; gap: 2px; }
+  .cat { display: grid; grid-template-columns: 120px 1fr 28px; align-items: center; gap: 10px; width: 100%;
+         border-color: transparent; background: none; padding: 5px 8px; text-align: left; }
+  .cat .bar { height: 12px; border-radius: 0 4px 4px 0; background: var(--accent); min-width: 4px; }
+  .cat .num { text-align: right; color: var(--ink); }
+  .stats button[aria-pressed="true"] { border-color: var(--accent); background: var(--bg); }
+  .stats-note { color: var(--muted); font-size: 13px; margin: -10px 0 0; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .tag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+         border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; }
+  .tag .swatch { width: 8px; height: 8px; border-radius: 50%; }
+  .item .text { margin-top: 8px; }
 
   .list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
   h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
@@ -51,12 +79,25 @@
     <div class="pet-note" id="pet-note"></div>
   </section>
 
+  <section class="stats" id="stats" hidden>
+    <div>
+      <h2>Sentimiento</h2>
+      <div class="stack" id="stack" role="img"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div>
+      <h2>Temas, por cantidad</h2>
+      <div class="cats" id="cats"></div>
+    </div>
+    <p class="stats-note" id="stats-note" hidden></p>
+  </section>
+
   <div class="list-head">
-    <h1>Audios</h1>
-    <span class="count" id="count"></span>
+    <h1 id="list-title">Mensajes</h1>
+    <span><span class="count" id="count"></span><button id="clear" hidden>Ver todos</button></span>
   </div>
   <div id="list"></div>
-  <p class="empty" id="empty" hidden>Todavía no llegó ningún audio.</p>
+  <p class="empty" id="empty" hidden>Todavía no llegó ningún mensaje.</p>
 </main>
 
 <script>
@@ -66,37 +107,25 @@ const LIFE_MS = 60 * 60 * 1000;   // el aro se vacía en una hora
 const GAIN_PER_WORD = 100;        // milésimas de vida por palabra entendida
 const GAIN_PER_SECOND = 30;       // si no se pudo transcribir, por segundo de audio
 
-const BODY = [
-  '................', '...KK......KK...', '..KBBK....KBBK..', '..KBBBKKKKBBBK..',
-  '.KBBBBBBBBBBBBK.', '.KBLBBBBBBBBBBK.', 'KBBLBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK',
-  'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK', 'KBBBBBBBBBBBBBBK',
-  '.KBBBBBBBBBBBBK.', '.KBBBBBBBBBBBBK.', '..KKBBKKKKBBKK..', '...KKK....KKK...',
-];
-// Caras: filas 5 a 12 de la cuadrícula.
-const FACES = {
-  idle:   ['', '', '....WE....WE....', '....EE....EE....', '', '.......KK.......', '', ''],
-  blink:  ['', '', '', '....KK....KK....', '', '.......KK.......', '', ''],
-  sad:    ['', '', '', '....WE....WE....', '....EE....EE....', '.....T..........', '.......KK.......', '......K..K......'],
-  chewA:  ['', '', '....K......K....', '...K.K....K.K...', '', '.......MM.......', '.......MM.......', ''],
-  chewB:  ['', '', '....K......K....', '...K.K....K.K...', '', '......KKKK......', '', ''],
-  happy:  ['', '', '....K......K....', '...K.K....K.K...', '.PP..........PP.', '......K..K......', '.......KK.......', ''],
-  dead:   ['', '', '...K.K....K.K...', '....K......K....', '...K.K....K.K...', '', '......KKKK......', ''],
-};
-const BODY_COLORS = {
-  ok:     { K: '#134e4a', B: '#5eead4', L: '#ccfbf1' },
-  hungry: { K: '#1e3a5f', B: '#93b4d8', L: '#dbe7f5' },
-  dead:   { K: '#374151', B: '#8b929e', L: '#b6bcc6' },
-};
-const FACE_COLORS = { W: '#fff', E: '#111827', K: '#111827', M: '#9f1239', P: '#fb7185', T: '#60a5fa' };
-const HEART = ['.XX.XX.', 'XXXXXXX', 'XXXXXXX', '.XXXXX.', '..XXX..', '...X...'];
+// Expresiones, en el orden de la hoja de la mascota (public/sprites/NN.png).
+const SPR = { smile: 0, joy: 1, sparkle: 2, wink: 3, cool: 4, cry: 5, angry: 6, surprised: 7,
+              confused: 8, love: 9, sleep: 10, hungry: 11, sick: 12, dizzy: 13, dead: 14 };
+const sprites = Array.from({ length: 15 }, (_, i) => {
+  const img = new Image();
+  img.src = `/sprites/${String(i).padStart(2, '0')}.png`;
+  return img;
+});
 
 const canvas = document.getElementById('pet');
 const ctx = canvas.getContext('2d');
-const CX = 120, CY = 120, SCALE = 7, SPR_X = CX - 56, SPR_Y = CY + 2 - 56;
+const CX = 120, CY = 120, SPR_X = 36, SPR_Y = 40;
 
-function drawPet({ life, face, body, bounce = 0, heart = false, halo = false, dots = -1, ringDim = false }) {
+function drawPet({ life, sprite, bounce = 0, sway = 0, dots = -1, ringDim = false }) {
   ctx.fillStyle = '#0b1020';
   ctx.fillRect(0, 0, 240, 240);
+
+  const img = sprites[sprite];
+  if (img.complete && img.naturalWidth) ctx.drawImage(img, SPR_X + sway, SPR_Y + bounce);
 
   // Aro de vida: lleno desde arriba, en sentido horario.
   const ring = (from, to, color) => {
@@ -113,38 +142,23 @@ function drawPet({ life, face, body, bounce = 0, heart = false, halo = false, do
     ring(top, top + (Math.min(life, 1000) / 1000) * Math.PI * 2, color);
   }
 
-  if (heart) {
-    ctx.fillStyle = '#fb7185';
-    HEART.forEach((row, y) => [...row].forEach((c, x) => c === 'X' && ctx.fillRect(CX - 14 + x * 4, 28 + y * 4, 4, 4)));
-  }
-  if (halo) {
-    ctx.beginPath();
-    ctx.ellipse(CX, 46, 26, 7, 0, 0, Math.PI * 2);
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = '#fde047';
-    ctx.stroke();
-  }
   if (dots >= 0) {
     for (let i = 0; i < 3; i++) {
       ctx.beginPath();
-      ctx.arc(CX - 20 + i * 20, 200, 5, 0, Math.PI * 2);
+      ctx.arc(CX - 20 + i * 20, i === dots ? 198 : 204, 5, 0, Math.PI * 2);  // el activo salta
       ctx.fillStyle = i === dots ? '#f9fafb' : '#374151';
       ctx.fill();
     }
   }
+}
 
-  const pal = BODY_COLORS[body];
-  const rows = FACES[face];
-  for (let gy = 0; gy < 16; gy++) {
-    for (let gx = 0; gx < 16; gx++) {
-      const f = gy >= 5 && gy < 13 ? rows[gy - 5][gx] : undefined;
-      const color = FACE_COLORS[f] || pal[BODY[gy][gx]];
-      if (color) {
-        ctx.fillStyle = color;
-        ctx.fillRect(SPR_X + gx * SCALE, SPR_Y + bounce + gy * SCALE, SCALE, SCALE);
-      }
-    }
-  }
+// La misma elección de expresión que hace el dispositivo cuando está en reposo.
+function idleSprite(life, t) {
+  if (life < 100) return SPR.sick;
+  if (life < 300) return SPR.cry;
+  if (life < 600) return SPR.hungry;
+  if (life >= 900) return t % 6000 < 600 ? SPR.sparkle : SPR.cool;
+  return t % 6000 < 500 ? SPR.wink : SPR.smile;
 }
 
 // Cuánta vida dio un audio (milésimas), con la misma regla del dispositivo.
@@ -179,20 +193,24 @@ function tickPet() {
   const { life, fedOnce } = simulateLife(audios, now);
   const digesting = audios.some((a) => a.status === 'transcribing');
   const dead = fedOnce && life <= 0;
-  const hungry = life < 300;
-  const scene = { life, body: dead ? 'dead' : hungry ? 'hungry' : 'ok', ringDim: !dead && fedOnce && life < 100 && Math.floor(now / 400) % 2 };
+  const scene = { life, ringDim: !dead && fedOnce && life < 100 && Math.floor(now / 400) % 2 };
 
   if (digesting) {
-    scene.face = Math.floor(now / 250) % 2 ? 'chewA' : 'chewB';
-    scene.dots = Math.floor(now / 250) % 3;
+    // Pensando: se balancea de lado a lado y los puntos saltan en ola.
+    scene.sprite = SPR.confused;
+    scene.sway = Math.round(Math.sin(now / 190) * 5);
+    scene.dots = Math.floor(now / 220) % 3;
   } else if (now < happyUntil) {
-    scene.face = 'happy'; scene.heart = true; scene.bounce = Math.floor(now / 200) % 2 ? -4 : 0;
+    scene.sprite = happyUntil - now > 2500 ? SPR.love : SPR.joy;
+    scene.bounce = Math.floor(now / 200) % 2 ? -4 : 0;
   } else if (dead) {
-    scene.face = 'dead'; scene.halo = true;
-  } else if (hungry) {
-    scene.face = 'sad'; scene.bounce = Math.floor(now / 900) % 2 ? 2 : 0;
+    scene.sprite = SPR.dead;
+  } else if (!fedOnce) {
+    scene.sprite = SPR.hungry;
+    scene.bounce = Math.floor(now / 900) % 2 ? 3 : 0;
   } else {
-    scene.face = now % 4000 < 160 ? 'blink' : 'idle'; scene.bounce = Math.floor(now / 500) % 2 ? 3 : 0;
+    scene.sprite = idleSprite(life, now);
+    scene.bounce = Math.floor(now / (life < 300 ? 900 : 500)) % 2 ? 3 : 0;
   }
   drawPet(scene);
 
@@ -205,7 +223,102 @@ function tickPet() {
     : `Le ${mins === 1 ? 'queda 1 minuto' : `quedan ${mins} minutos`} sin comer.`;
 }
 
-// ---------- Listado de audios ----------
+// ---------- Resumen: sentimiento y temas ----------
+
+const SENTIMENTS = [
+  { id: 'positivo', label: 'Positivos', one: 'Positivo', color: 'var(--pos)' },
+  { id: 'neutro', label: 'Neutros', one: 'Neutro', color: 'var(--neu)' },
+  { id: 'negativo', label: 'Negativos', one: 'Negativo', color: 'var(--neg)' },
+];
+const CATEGORY_LABEL = { queja: 'Queja', pedido: 'Pedido', pregunta: 'Pregunta', agradecimiento: 'Agradecimiento',
+                         saludo: 'Saludo', idea: 'Idea', comentario: 'Comentario', otro: 'Otro' };
+const catLabel = (c) => CATEGORY_LABEL[c] || c;
+
+let filter = null; // { key: 'sentiment' | 'category', value }
+const isOn = (key, value) => filter?.key === key && filter.value === value;
+const matches = (a) => !filter || a[filter.key] === filter.value;
+
+function setFilter(key, value) {
+  filter = !key || isOn(key, value) ? null : { key, value };
+  renderStats();
+  applyFilter();
+  if (filter) document.getElementById('list-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+let statsSig = '';
+function renderStats() {
+  const rated = audios.filter((a) => a.sentiment);
+  const pending = audios.filter((a) => a.status === 'done' && a.words > 0 && !a.sentiment).length;
+  const sig = JSON.stringify([rated.map((a) => [a.id, a.sentiment, a.category]), pending, filter]);
+  if (sig === statsSig) return;
+  statsSig = sig;
+
+  document.getElementById('stats').hidden = rated.length === 0;
+  const note = document.getElementById('stats-note');
+  note.hidden = pending === 0;
+  note.textContent = pending === 1 ? 'Falta clasificar 1 mensaje.' : `Faltan clasificar ${pending} mensajes.`;
+  if (!rated.length) return;
+
+  const pct = (n) => `${Math.round((n / rated.length) * 100)}%`;
+  const bySent = SENTIMENTS.map((s) => ({ ...s, n: rated.filter((a) => a.sentiment === s.id).length }));
+  const stack = document.getElementById('stack');
+  stack.ariaLabel = bySent.map((s) => `${s.label}: ${s.n}`).join(', ');
+  stack.replaceChildren(...bySent.filter((s) => s.n).map((s) =>
+    Object.assign(el('span', { title: `${s.label}: ${s.n} (${pct(s.n)})` }), { style: `flex:${s.n};background:${s.color}` })));
+  document.getElementById('legend').replaceChildren(...bySent.map((s) => {
+    const b = el('button', { disabled: !s.n, title: 'Ver estos mensajes' },
+      Object.assign(el('span', { className: 'swatch' }), { style: `background:${s.color}` }),
+      s.label, el('span', { className: 'num' }, `${s.n} · ${pct(s.n)}`));
+    b.setAttribute('aria-pressed', isOn('sentiment', s.id));
+    b.onclick = () => setFilter('sentiment', s.id);
+    return b;
+  }));
+
+  const counts = new Map();
+  for (const a of rated) counts.set(a.category, (counts.get(a.category) || 0) + 1);
+  const cats = [...counts].sort((x, y) => y[1] - x[1] || catLabel(x[0]).localeCompare(catLabel(y[0])));
+  const max = cats[0][1];
+  document.getElementById('cats').replaceChildren(...cats.map(([c, n]) => {
+    const b = el('button', { className: 'cat', title: `${catLabel(c)}: ${n} (${pct(n)}). Ver estos mensajes` },
+      catLabel(c),
+      el('span', {}, Object.assign(el('span', { className: 'bar' }), { style: `display:block;width:${(n / max) * 100}%` })),
+      el('span', { className: 'num' }, String(n)));
+    b.setAttribute('aria-pressed', isOn('category', c));
+    b.onclick = () => setFilter('category', c);
+    return b;
+  }));
+}
+
+function applyFilter() {
+  let shown = 0;
+  for (const a of audios) {
+    const it = items.get(a.id);
+    if (!it) continue;
+    it.el.hidden = !matches(a);
+    if (!it.el.hidden) shown++;
+  }
+  const name = !filter ? 'Mensajes'
+    : filter.key === 'sentiment' ? SENTIMENTS.find((s) => s.id === filter.value).label
+    : catLabel(filter.value);
+  document.getElementById('list-title').textContent = name;
+  document.getElementById('clear').hidden = !filter;
+  count.textContent = shown === 1 ? '1 mensaje' : `${shown} mensajes`;
+}
+document.getElementById('clear').onclick = () => setFilter(null);
+
+// Los textos que quedaron sin clasificar (registros antiguos) se clasifican de a uno.
+const analyzeTried = new Set();
+let analyzing = false;
+function analyzePending() {
+  if (analyzing) return;
+  const a = audios.find((x) => x.status === 'done' && x.words > 0 && !x.sentiment && !analyzeTried.has(x.id));
+  if (!a) return;
+  analyzing = true;
+  analyzeTried.add(a.id);
+  fetch(`/api/audios/${a.id}/analyze`, { method: 'POST' }).catch(() => {}).finally(() => { analyzing = false; refresh(); });
+}
+
+// ---------- Listado de mensajes ----------
 
 const list = document.getElementById('list');
 const empty = document.getElementById('empty');
@@ -213,7 +326,6 @@ const count = document.getElementById('count');
 const items = new Map(); // id -> { el, body, sig }
 
 const fmtDate = new Intl.DateTimeFormat('es', { dateStyle: 'medium', timeStyle: 'medium' });
-const fmtSize = (b) => b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
@@ -223,18 +335,30 @@ function el(tag, props = {}, ...children) {
 
 function renderBody(a) {
   if (a.status === 'done') {
-    return el('p', { className: 'text' }, a.text || '(sin voz detectada)');
+    const text = el('p', { className: 'text' }, a.text || '(sin voz detectada)');
+    if (!a.sentiment) return text;
+    const s = SENTIMENTS.find((x) => x.id === a.sentiment);
+    return el('div', {},
+      el('div', { className: 'tags' },
+        el('span', { className: 'tag' },
+          Object.assign(el('span', { className: 'swatch' }), { style: `background:${s?.color}` }), s?.one || a.sentiment),
+        el('span', { className: 'tag' }, catLabel(a.category))),
+      text);
   }
   if (a.status === 'transcribing') {
     return el('p', { className: 'text pending' }, 'Transcribiendo…');
   }
-  const retry = el('button', { textContent: 'Reintentar' });
-  retry.onclick = () => {
-    retry.disabled = true;
-    fetch(`/api/audios/${a.id}/transcribe`, { method: 'POST' }).finally(refresh);
-    setTimeout(refresh, 300);
-  };
-  return el('p', { className: 'text error' }, `No se pudo transcribir: ${a.error || 'error desconocido'}`, retry);
+  const msg = el('p', { className: 'text error' }, `No se pudo transcribir: ${a.error || 'error desconocido'}`);
+  if (a.audio_url) { // solo los registros antiguos conservan el audio para reintentar
+    const retry = el('button', { textContent: 'Reintentar' });
+    retry.onclick = () => {
+      retry.disabled = true;
+      fetch(`/api/audios/${a.id}/transcribe`, { method: 'POST' }).finally(refresh);
+      setTimeout(refresh, 300);
+    };
+    msg.append(retry);
+  }
+  return msg;
 }
 
 function createItem(a) {
@@ -242,8 +366,8 @@ function createItem(a) {
   const node = el('article', { className: 'item' },
     el('div', { className: 'meta' },
       el('time', { dateTime: a.created_at }, fmtDate.format(new Date(a.created_at))),
-      el('span', {}, `#${a.id} · ${fmtSize(a.size)}`)),
-    el('audio', { controls: true, preload: 'none', src: a.audio_url }),
+      el('span', {}, `#${a.id}`)),
+    ...(a.audio_url ? [el('audio', { controls: true, preload: 'none', src: a.audio_url })] : []),
     body);
   return { el: node, body, sig: '' };
 }
@@ -259,9 +383,8 @@ async function refresh() {
     if (firstLoad) { empty.hidden = false; empty.textContent = err.message; }
     return;
   }
-  empty.textContent = 'Todavía no llegó ningún audio.';
+  empty.textContent = 'Todavía no llegó ningún mensaje.';
   empty.hidden = data.length > 0;
-  count.textContent = data.length === 1 ? '1 audio' : `${data.length} audios`;
 
   // Si acaba de llegar comida nueva, se pone contento un momento.
   const known = new Set(audios.filter((a) => gainOf(a) > 0).map((a) => a.id));
@@ -275,7 +398,7 @@ async function refresh() {
     seen.add(a.id);
     let it = items.get(a.id);
     if (!it) { it = createItem(a); items.set(a.id, it); }
-    const sig = `${a.status}|${a.text}|${a.error}`;
+    const sig = `${a.status}|${a.text}|${a.error}|${a.sentiment}|${a.category}`;
     if (it.sig !== sig) { it.body.replaceChildren(renderBody(a)); it.sig = sig; }
     // Solo mover si hace falta, para no cortar un audio que esté sonando.
     const expected = prev ? prev.nextSibling : list.firstChild;
@@ -283,6 +406,11 @@ async function refresh() {
     prev = it.el;
   }
   for (const [id, it] of items) if (!seen.has(id)) { it.el.remove(); items.delete(id); }
+
+  if (filter && !data.some(matches)) filter = null;
+  renderStats();
+  applyFilter();
+  analyzePending();
 }
 
 tickPet();

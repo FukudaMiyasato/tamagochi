@@ -1,15 +1,14 @@
-// Dos formas de guardar los audios, con la misma interfaz:
-//   - cloud: Vercel Blob (archivos) + Postgres (registros). Se usa cuando existen
-//     BLOB_READ_WRITE_TOKEN y DATABASE_URL (o POSTGRES_URL).
-//   - local: carpeta data/ + SQLite. Para desarrollo en tu máquina.
+// Dos formas de guardar los registros, con la misma interfaz:
+//   - cloud: Postgres. Se usa cuando existe DATABASE_URL (o POSTGRES_URL).
+//   - local: SQLite en data/. Para desarrollo en tu máquina.
+// El audio ya no se guarda: solo el texto, el sentimiento y la categoría.
+// Los registros antiguos conservan su audio (en Vercel Blob o en data/audios).
 const path = require('node:path');
 
 const PG_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
 
 function createCloudStore() {
   const { Pool } = require('pg');
-  const { put } = require('@vercel/blob');
   const pool = new Pool({ connectionString: PG_URL, max: 2 });
   let ready;
   const init = () =>
@@ -25,7 +24,10 @@ function createCloudStore() {
         text          TEXT,
         error         TEXT,
         created_at    TEXT NOT NULL
-      )
+      );
+      ALTER TABLE audios ALTER COLUMN blob_url DROP NOT NULL;
+      ALTER TABLE audios ADD COLUMN IF NOT EXISTS sentiment TEXT;
+      ALTER TABLE audios ADD COLUMN IF NOT EXISTS category TEXT;
     `));
   const q = async (text, params) => {
     await init();
@@ -35,23 +37,22 @@ function createCloudStore() {
   return {
     kind: 'cloud',
     async create({ buffer, filename, mime, originalName }) {
-      const blob = await put(`audios/${filename}`, buffer, {
-        access: 'public',
-        contentType: mime,
-        addRandomSuffix: false,
-        token: BLOB_TOKEN,
-      });
       const rows = await q(
-        `INSERT INTO audios (filename, blob_url, original_name, mime, size, status, created_at)
-         VALUES ($1, $2, $3, $4, $5, 'transcribing', $6) RETURNING id`,
-        [filename, blob.url, originalName || null, mime, buffer.length, new Date().toISOString()]
+        `INSERT INTO audios (filename, original_name, mime, size, status, created_at)
+         VALUES ($1, $2, $3, $4, 'transcribing', $5) RETURNING id`,
+        [filename, originalName || null, mime, buffer.length, new Date().toISOString()]
       );
       return rows[0].id;
     },
     list: () => q('SELECT * FROM audios ORDER BY id DESC'),
     get: async (id) => (await q('SELECT * FROM audios WHERE id = $1', [id]))[0],
-    update: (id, { status, text = null, error = null }) =>
-      q('UPDATE audios SET status = $2, text = COALESCE($3, text), error = $4 WHERE id = $1', [id, status, text, error]),
+    update: (id, { status, text = null, error = null, sentiment = null, category = null }) =>
+      q(
+        `UPDATE audios SET status = $2, text = COALESCE($3, text), error = $4,
+           sentiment = COALESCE($5, sentiment), category = COALESCE($6, category) WHERE id = $1`,
+        [id, status, text, error, sentiment, category]
+      ),
+    hasAudio: (row) => Boolean(row.blob_url),
     async readAudio(row) {
       const res = await fetch(row.blob_url);
       if (!res.ok) throw new Error(`No se pudo leer el audio guardado (${res.status})`);
@@ -82,6 +83,10 @@ function createLocalStore() {
       created_at    TEXT NOT NULL
     )
   `);
+  const cols = db.prepare('PRAGMA table_info(audios)').all().map((c) => c.name);
+  for (const col of ['sentiment', 'category']) {
+    if (!cols.includes(col)) db.exec(`ALTER TABLE audios ADD COLUMN ${col} TEXT`);
+  }
   // Lo que quedó a medias si el servidor se reinició mientras transcribía.
   db.prepare(
     "UPDATE audios SET status = 'error', error = 'El servidor se reinició durante la transcripción' WHERE status = 'transcribing'"
@@ -90,7 +95,6 @@ function createLocalStore() {
   return {
     kind: 'local',
     async create({ buffer, filename, mime, originalName }) {
-      fs.writeFileSync(path.join(audioDir, filename), buffer);
       const info = db
         .prepare(
           "INSERT INTO audios (filename, original_name, mime, size, status, created_at) VALUES (?, ?, ?, ?, 'transcribing', ?)"
@@ -100,9 +104,13 @@ function createLocalStore() {
     },
     list: async () => db.prepare('SELECT * FROM audios ORDER BY id DESC').all(),
     get: async (id) => db.prepare('SELECT * FROM audios WHERE id = ?').get(id),
-    update: async (id, { status, text = null, error = null }) => {
-      db.prepare('UPDATE audios SET status = ?, text = COALESCE(?, text), error = ? WHERE id = ?').run(status, text, error, id);
+    update: async (id, { status, text = null, error = null, sentiment = null, category = null }) => {
+      db.prepare(
+        `UPDATE audios SET status = ?, text = COALESCE(?, text), error = ?,
+           sentiment = COALESCE(?, sentiment), category = COALESCE(?, category) WHERE id = ?`
+      ).run(status, text, error, sentiment, category, id);
     },
+    hasAudio: (row) => fs.existsSync(path.join(audioDir, row.filename)),
     readAudio: async (row) => fs.readFileSync(path.join(audioDir, row.filename)),
     sendAudio: (row, res) => {
       res.set('X-Content-Type-Options', 'nosniff');
@@ -115,10 +123,9 @@ let store;
 /** Devuelve el almacenamiento, o lanza un error explicando qué falta configurar. */
 function getStore() {
   if (store) return store;
-  if (PG_URL && BLOB_TOKEN) return (store = createCloudStore());
+  if (PG_URL) return (store = createCloudStore());
   if (process.env.VERCEL) {
-    const missing = [!BLOB_TOKEN && 'Vercel Blob (BLOB_READ_WRITE_TOKEN)', !PG_URL && 'Postgres (DATABASE_URL)'].filter(Boolean);
-    const err = new Error(`Falta conectar al proyecto en Vercel: ${missing.join(' y ')}`);
+    const err = new Error('Falta conectar al proyecto en Vercel: Postgres (DATABASE_URL)');
     err.status = 503;
     throw err;
   }
