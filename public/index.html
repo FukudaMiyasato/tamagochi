@@ -40,7 +40,7 @@
   .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
   .num { font-variant-numeric: tabular-nums; color: var(--muted); }
   .cats { display: grid; gap: 2px; }
-  .cat { display: grid; grid-template-columns: 120px 1fr 28px; align-items: center; gap: 10px; width: 100%;
+  .cat { display: grid; grid-template-columns: 170px 1fr 28px; align-items: center; gap: 10px; width: 100%;
          border-color: transparent; background: none; padding: 5px 8px; text-align: left; }
   .cat .bar { height: 12px; border-radius: 0 4px 4px 0; background: var(--accent); min-width: 4px; }
   .cat .num { text-align: right; color: var(--ink); }
@@ -86,7 +86,7 @@
       <div class="legend" id="legend"></div>
     </div>
     <div>
-      <h2>Temas, por cantidad</h2>
+      <h2>Incidencias por tema</h2>
       <div class="cats" id="cats"></div>
     </div>
     <p class="stats-note" id="stats-note" hidden></p>
@@ -230,8 +230,9 @@ const SENTIMENTS = [
   { id: 'neutro', label: 'Neutros', one: 'Neutro', color: 'var(--neu)' },
   { id: 'negativo', label: 'Negativos', one: 'Negativo', color: 'var(--neg)' },
 ];
-const CATEGORY_LABEL = { queja: 'Queja', pedido: 'Pedido', pregunta: 'Pregunta', agradecimiento: 'Agradecimiento',
-                         saludo: 'Saludo', idea: 'Idea', comentario: 'Comentario', otro: 'Otro' };
+const CATEGORY_LABEL = { promociones: 'Promociones y precios', boleteria: 'Boletería y entradas', dulceria: 'Dulcería',
+                         limpieza: 'Limpieza y olores', proyeccion: 'Proyección y sonido', instalaciones: 'Instalaciones',
+                         atencion: 'Atención al cliente', seguridad: 'Seguridad', personal: 'Personal', otro: 'Otro' };
 const catLabel = (c) => CATEGORY_LABEL[c] || c;
 
 let filter = null; // { key: 'sentiment' | 'category', value }
@@ -247,8 +248,8 @@ function setFilter(key, value) {
 
 let statsSig = '';
 function renderStats() {
-  const rated = audios.filter((a) => a.sentiment);
-  const pending = audios.filter((a) => a.status === 'done' && a.words > 0 && !a.sentiment).length;
+  const rated = audios.filter((a) => a.sentiment && CATEGORY_LABEL[a.category]);
+  const pending = audios.filter((a) => a.status === 'done' && a.words > 0 && (!a.sentiment || !CATEGORY_LABEL[a.category])).length;
   const sig = JSON.stringify([rated.map((a) => [a.id, a.sentiment, a.category]), pending, filter]);
   if (sig === statsSig) return;
   statsSig = sig;
@@ -306,12 +307,12 @@ function applyFilter() {
 }
 document.getElementById('clear').onclick = () => setFilter(null);
 
-// Los textos que quedaron sin clasificar (registros antiguos) se clasifican de a uno.
+// Los textos sin clasificar o con una categoría antigua se clasifican de a uno.
 const analyzeTried = new Set();
 let analyzing = false;
 function analyzePending() {
   if (analyzing) return;
-  const a = audios.find((x) => x.status === 'done' && x.words > 0 && !x.sentiment && !analyzeTried.has(x.id));
+  const a = audios.find((x) => x.status === 'done' && x.words > 0 && (!x.sentiment || !CATEGORY_LABEL[x.category]) && !analyzeTried.has(x.id));
   if (!a) return;
   analyzing = true;
   analyzeTried.add(a.id);

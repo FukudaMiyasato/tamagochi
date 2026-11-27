@@ -54,14 +54,14 @@ Respuesta:
   "status": "done",
   "text": "Hola, esto es una prueba.",
   "sentiment": "neutro",
-  "category": "saludo",
+  "category": "otro",
   "words": 5,
   "error": null,
   "created_at": "2026-11-24T20:51:00.000Z"
 }
 ```
 
-`sentiment` es `positivo`, `negativo` o `neutro`. `category` es una de: `queja`, `pedido`, `pregunta`, `agradecimiento`, `saludo`, `idea`, `comentario`, `otro`. Las asigna un modelo de OpenAI (`gpt-4o-mini`; se cambia con `OPENAI_CHAT_MODEL`).
+`sentiment` es `positivo`, `negativo` o `neutro`. `category` es el tema de la incidencia del cine: `promociones`, `boleteria`, `dulceria`, `limpieza`, `proyeccion`, `instalaciones`, `atencion`, `seguridad`, `personal` u `otro` (la lista y sus descripciones están en `server.js`). Las asigna un modelo de OpenAI (`gpt-4o-mini`; se cambia con `OPENAI_CHAT_MODEL`).
 
 `words` es la cantidad de palabras de la transcripción; el tamagochi la usa para saber cuánto comió.
 
