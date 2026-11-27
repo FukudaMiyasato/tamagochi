@@ -19,3 +19,15 @@ int audio_level(void);
 // Deja la partición lista para la próxima grabación.
 void audio_erase(size_t used_bytes);
 const esp_partition_t *audio_partition(void);
+
+// Sonidos por el parlante. No suenan mientras se está grabando.
+typedef enum {
+    SOUND_HELLO,     // al encender
+    SOUND_FED,       // comió
+    SOUND_NO_VOICE,  // no se oyó a nadie
+    SOUND_FAIL,      // el audio no llegó
+    SOUND_HUNGRY,    // aviso de hambre
+    SOUND_DEAD,      // murió
+    SOUND_REVIVE,    // revivió
+} sound_t;
+void audio_play(sound_t sound);

@@ -18,6 +18,10 @@
 #define PIN_I2S_WS   6
 #define PIN_I2S_DIN  7
 
+#define PIN_I2S_DOUT 5    // hacia el parlante
+#define PIN_AMP      11   // enciende el amplificador del parlante
+#define PIN_LED      2    // LED RGB (WS2812B) de la placa
+
 // Botón BOOT: se mantiene presionado para grabar.
 #define PIN_BUTTON   9
 
@@ -32,6 +36,10 @@
 // veces el del momento más callado de la misma grabación.
 #define VOICE_RATIO_X10  25    // 2.5 veces
 #define VOICE_MIN_MS     300   // voz mínima para enviar el audio
+
+// Parlante y luz.
+#define SOUND_VOLUME    60   // 0..100; 0 = sin sonido
+#define LED_BRIGHTNESS  40   // 0..255; 0 = luz apagada
 
 // Vida: se vacía en una hora sin comer.
 #define LIFE_MAX_MS        (60LL * 60 * 1000)

@@ -22,6 +22,9 @@ static SemaphoreHandle_t s_flushed;
 
 // El envío por SPI es asíncrono: hay que esperar a que termine antes de
 // reutilizar el buffer de la franja.
+// Sprites de la mascota, incluidos en el firmware desde sprites.bin.
+extern const uint8_t sprites_start[] asm("_binary_sprites_bin_start");
+
 static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
 {
     BaseType_t woken = pdFALSE;
@@ -31,6 +34,7 @@ static bool on_color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_d
 
 esp_err_t display_init(void)
 {
+    render_set_sprites((const uint16_t *)sprites_start);
     s_flushed = xSemaphoreCreateBinary();
     s_band = heap_caps_malloc(BAND_BYTES, MALLOC_CAP_DMA);
     ESP_RETURN_ON_FALSE(s_flushed && s_band, ESP_ERR_NO_MEM, TAG, "sin memoria para la pantalla");
